@@ -21,11 +21,12 @@ local ReplicationTableData = {}
 local ReplicationConnections = {}
 
 local OriginalOffsets = {}
+local OriginalHatData = {}
 local LastRefitTime = {}
 local RefitBlacklist         = {}
 local RefitLostCount         = 0
 local RefitThreshold         = 4
-local RefitInterval          = 5.0
+local RefitInterval          = 3.5
 local RefitPerCycle          = 1
 local RefitEnabled           = true
 
@@ -130,6 +131,14 @@ local function ReplicateAccessory(Part0: string | number | BasePart, Part1: Base
 	    Part1 = Part1,
 	    Transform = AccessoryTransform
 	}
+	-- also store simplified hat data for stable refit
+	if not OriginalHatData[AccessoryKey] then
+	    OriginalHatData[AccessoryKey] = {
+	        Handle = AccessoryHandle,
+	        OriginalPart1 = Part1,
+	        OriginalTransform = AccessoryTransform
+	    }
+	end
 
 	if RefitBlacklist and AccessoryKey and not table.find(RefitBlacklist, AccessoryKey) then
 		table.insert(RefitBlacklist, AccessoryKey)
@@ -498,83 +507,48 @@ end
 -- Improved refit routine: periodically scan the real character's accessories and re-replicate any surviving hats
 local function AttemptRefit()
     if not RefitEnabled then return end
-    if not ReanimationCharacter or not ReanimationCharacter.Parent then return end
 
-    if IsRigCollapsed() then
-        warn("[Refit] Rig collapsed - skipping refit to avoid further damage")
-        return
-    end
-
-    local ReanimatedRoot = ReanimationCharacter:FindFirstChild("HumanoidRootPart")
-    if not ReanimatedRoot then return end
+    local reanimatedRoot = ReanimationCharacter and ReanimationCharacter:FindFirstChild("HumanoidRootPart")
+    if not reanimatedRoot then return end
 
     local recovered = 0
-    local now = os.clock()
 
     for _, acc in ipairs(Humanoid:GetAccessories()) do
         local handle = acc:FindFirstChild("Handle")
         if not handle or handle.Parent ~= acc then continue end
 
-        local accKey = acc
+        -- skip if already replicating
+        if ReplicationConnections[acc] then continue end
 
-        -- per-hat cooldown to avoid rapid reattach (3s)
-        if LastRefitTime[accKey] and now - LastRefitTime[accKey] < 3 then
-            continue
-        end
-
-        -- Already replicating? Skip (prevents dupes)
-        if ReplicationConnections[accKey] then continue end
-
-        local stored = OriginalOffsets[accKey]
-        local targetPart = nil
-        if stored and stored.Part1 and stored.Part1.Parent and stored.Part1:IsDescendantOf(ReanimationCharacter) then
-            targetPart = stored.Part1
-        else
-            -- prefer not to attach to root unless original missing
-            targetPart = ReanimatedRoot
-        end
+        local data = OriginalHatData[acc]
+        local targetPart = (data and data.OriginalPart1 and data.OriginalPart1.Parent and data.OriginalPart1:IsDescendantOf(ReanimationCharacter)) and data.OriginalPart1 or reanimatedRoot
 
         if not targetPart then continue end
 
-        local transform = stored and stored.Transform or CFrame.new()
-
-        -- Clean any ghost conn (rare but safety)
-        if ReplicationConnections[accKey] then
-            ReplicationConnections[accKey]:Disconnect()
-            ReplicationConnections[accKey] = nil
+        -- clean any ghost connection
+        if ReplicationConnections[acc] then
+            ReplicationConnections[acc]:Disconnect()
+            ReplicationConnections[acc] = nil
         end
 
-        -- Replicate with original offset
-        ReplicateAccessory(handle, targetPart, transform)
-
-        LastRefitTime[accKey] = os.clock()
+        ReplicateAccessory(handle, targetPart, data and data.OriginalTransform or CFrame.new())
 
         recovered = recovered + 1
-        print("[Refit] Recovered:", acc.Name, "->", targetPart.Name)
+        print("[Refit] Brought back:", acc.Name)
 
-        -- limit how many hats we reattach per cycle to reduce stress
         if recovered >= RefitPerCycle then
             break
         end
     end
 
     if recovered > 0 then
-        Notification("REANIMITE", "Refit recovered " .. recovered .. " hats", 3)
-
-        -- Stabilize dummy parts to avoid fling/collapse
-        for _, part in ipairs(ReanimationCharacter:GetDescendants()) do
-            if part:IsA("BasePart") and part ~= ReanimationCharacter:FindFirstChild("HumanoidRootPart") then
-                part.AssemblyLinearVelocity = Vector3.zero
-                part.AssemblyAngularVelocity = Vector3.zero
-                pcall(function() part.Velocity = Vector3.zero end)
-            end
-        end
+        Notification("REANIMITE", "Refit recovered " .. recovered .. " hats", 4)
     end
 end
 
 -- periodic loop
 task.spawn(function()
-    task.wait(3)
+    task.wait(4)
     while RefitEnabled do
         pcall(AttemptRefit)
         task.wait(RefitInterval)
