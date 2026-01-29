@@ -414,61 +414,46 @@ function ReanimationModule:Reanimate(ReplicationTable)
 	ReanimationHandleRespawning()
 end
 
--- Refit functionality (adapted from Krypton, safe for Reanimite)
-local Refit = true  -- Включить/выключить (true = включено)
-local RefitCount = 6  -- Лимит аксессуаров для авто-refit (подбери под свои шляпы)
+local function RefitAccessories()
+    if not RefitEnabled then return end
 
-local Refitted = false  -- Для одноразового авто-триггера
+    local lostCount = 0
 
-local function RefitRig()
-	if not Refit or not ReanimationCharacter or not ReanimationCharacter.Parent then return end
-	
-	-- Только body-парты (не HRP и не Handle шляп)
-	for _, part in ReanimationCharacter:GetChildren() do
-		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
-			part.Transparency = 0.5
-			part.BrickColor = BrickColor.new("Forest green")
-		end
-	end
-	
-	-- Безопасный died-сигнал
-	if replicatesignal and Player and Player.ConnectDiedSignalBackend then
-		replicatesignal(Player.ConnectDiedSignalBackend)
-	end
-	
-	Notification("REANIMITE - Refit", "Refit triggered! Hats should realign now.", 5)
-	
-	-- Флэш обратно в invisible
-	task.delay(1.5, function()
-		if ReanimationCharacter and ReanimationCharacter.Parent then
-			for _, part in ReanimationCharacter:GetChildren() do
-				if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
-					part.Transparency = 1
-				end
-			end
-		end
-	end)
+    -- Clean up dead entries (like Krypton does)
+    for i = #RefitBlacklist, 1, -1 do
+        local acc = RefitBlacklist[i]
+        if not acc or not acc.Parent then
+            table.remove(RefitBlacklist, i)
+        else
+            -- still exists but maybe desynced → count as potentially lost
+            if acc.Handle and acc.Handle.Parent == nil then
+                lostCount += 1
+            end
+        end
+    end
+
+    -- If too many lost → force re-align / re-claim
+    if lostCount > RefitThreshold or #RefitBlacklist < TotalAccessories - RefitThreshold then
+        Notification("REANIMITE", "Refitting accessories... (" .. lostCount .. " lost)", 3)
+
+        -- Option A: Re-run accessory replication on visible hats
+        for _, acc in Humanoid:GetAccessories() do
+            local handle = acc:FindFirstChild("Handle")
+            if handle and handle.Parent then
+                -- Try to re-attach to a random / nearest dummy limb (customize this)
+                local targetPart = ReanimationCharacter:FindFirstChild("Right Arm") 
+                    or ReanimationCharacter:FindFirstChild("RightHand") 
+                    or ReanimationCharacter.HumanoidRootPart
+
+                if targetPart then
+                    ReplicateAccessory(handle, targetPart, CFrame.new())  -- or keep original offset if you store it
+                end
+            end
+        end
+
+        -- Option B: extreme — respawn dummy (risky, but Krypton sometimes does heavy resets)
+        -- task.spawn(ReanimationRespawn)   -- uncomment only if desperate
+    end
 end
-
--- Авто-refit один раз
-task.spawn(function()
-	while task.wait(0.5) do
-		if Refit and not Refitted and ReanimationCharacter and ReanimationCharacter.Parent then
-			local TotalAccessories = ReplicationTableData and #ReplicationTableData or 0
-			if TotalAccessories > RefitCount then
-				RefitRig()
-				Refitted = true
-				break
-			end
-		end
-	end
-end)
-
--- Ручные методы
-function ReanimationModule:Refit()
-	RefitRig()
-end
-
-ReanimationModule.InstantRefit = RefitRig
-
 return ReanimationModule
+
