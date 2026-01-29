@@ -23,7 +23,7 @@ local ReplicationConnections = {}
 local RefitBlacklist         = {}
 local RefitLostCount         = 0
 local RefitThreshold         = 4
-local RefitInterval          = 1.8
+local RefitInterval          = 1.2
 local RefitEnabled           = true
 
 local IsStudio = RunService:IsStudio()
@@ -134,54 +134,53 @@ local function ReplicateAccessory(Part0: string | number | BasePart, Part1: Base
 	end	
 	local function AttemptRefit()
     if not RefitEnabled then return end
+    if not ReanimationCharacter or not ReanimationCharacter.Parent then return end
 
-    RefitLostCount = 0
-    local StillAlive = {}
+    local ReanimatedRoot = ReanimationCharacter:FindFirstChild("HumanoidRootPart")
+    if not ReanimatedRoot then return end
 
-    -- Clean & count lost hats
-    for i = #RefitBlacklist, 1, -1 do
-        local acc = RefitBlacklist[i]
-        if not acc or not acc.Parent then
-            table.remove(RefitBlacklist, i)  -- dead forever, remove
-        else
-            local handle = acc:FindFirstChild("Handle")
-            if not handle or handle.Parent ~= acc then
-                RefitLostCount += 1
-            else
-                table.insert(StillAlive, acc)
+    local Recovered = 0
+    local AlreadyConnected = {}
+
+    for accKey in pairs(ReplicationConnections) do
+        AlreadyConnected[accKey] = true
+    end
+
+    local accessories = Humanoid and Humanoid:GetAccessories() or {}
+    for _, acc in ipairs(accessories) do
+        local handle = acc:FindFirstChild("Handle")
+        if not handle or handle.Parent ~= acc then
+            continue
+        end
+
+        if AlreadyConnected[acc] then
+            continue
+        end
+
+        -- pick a random limb on the dummy
+        local limbNames = {"Right Arm", "Left Arm", "Right Leg", "Left Leg", "Torso", "Head"}
+        local limb = nil
+        for i = 1, #limbNames do
+            local try = ReanimationCharacter:FindFirstChild(limbNames[math.random(1, #limbNames)])
+            if try then limb = try break end
+        end
+        limb = limb or ReanimatedRoot
+
+        if limb then
+            -- safety: clear stale connection if present
+            if ReplicationConnections[acc] then
+                ReplicationConnections[acc]:Disconnect()
+                ReplicationConnections[acc] = nil
             end
+
+            ReplicateAccessory(handle, limb, CFrame.new())
+            Recovered = Recovered + 1
+            print("[Refit] Recovered hat:", acc.Name)
         end
     end
 
-    -- If too many lost → try to bring back surviving ones
-    if RefitLostCount >= RefitThreshold then
-        Notification("REANIMITE", "Refitting hats... ("..RefitLostCount.." lost, recovering)", 4)
-
-        -- Re-attach still-alive accessories to dummy limbs
-        for _, acc in StillAlive do
-            local handle = acc:FindFirstChild("Handle")
-            if handle and handle.Parent == acc then
-                -- Pick a target limb on dummy (prefer arms/head > root)
-                local targetName = "Right Arm"   -- or randomize/cycle: "Left Arm", "Head", etc.
-                local targetPart = ReanimationCharacter:FindFirstChild(targetName)
-                             or ReanimationCharacter:FindFirstChild("RightHand")
-                             or ReanimationCharacter.HumanoidRootPart
-
-                if targetPart then
-                    -- Disconnect old if exists (prevents double conn)
-                    if ReplicationConnections[acc] then
-                        ReplicationConnections[acc]:Disconnect()
-                        ReplicationConnections[acc] = nil
-                    end
-
-                    -- Replicate again (use identity or store original offset if you want exact pos)
-                    ReplicateAccessory(handle, targetPart, CFrame.new())  -- tweak CFrame if needed
-                end
-            end
-        end
-
-        -- Optional extreme: tiny fling dummy root to "wake up" replication
-        -- ReanimationCharacter.HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(0, 30, 0)
+    if Recovered > 0 then
+        Notification("REANIMITE", "Refit recovered " .. Recovered .. " hats!", 3)
     end
 end
 
@@ -515,6 +514,68 @@ local function RefitAccessories()
         -- task.spawn(ReanimationRespawn)   -- uncomment only if desperate
     end
 end
+
+-- Improved refit routine: periodically scan the real character's accessories and re-replicate any surviving hats
+local function AttemptRefit()
+    if not RefitEnabled then return end
+    if not ReanimationCharacter or not ReanimationCharacter.Parent then return end
+
+    local ReanimatedRoot = ReanimationCharacter:FindFirstChild("HumanoidRootPart")
+    if not ReanimatedRoot then return end
+
+    local Recovered = 0
+    local AlreadyConnected = {}
+
+    for accKey in pairs(ReplicationConnections) do
+        AlreadyConnected[accKey] = true
+    end
+
+    local accessories = Humanoid and Humanoid:GetAccessories() or {}
+    for _, acc in ipairs(accessories) do
+        local handle = acc:FindFirstChild("Handle")
+        if not handle or handle.Parent ~= acc then
+            continue
+        end
+
+        if AlreadyConnected[acc] then
+            continue
+        end
+
+        -- pick a random limb on the dummy
+        local limbNames = {"Right Arm", "Left Arm", "Right Leg", "Left Leg", "Torso", "Head"}
+        local limb = nil
+        for i = 1, #limbNames do
+            local try = ReanimationCharacter:FindFirstChild(limbNames[math.random(1, #limbNames)])
+            if try then limb = try break end
+        end
+        limb = limb or ReanimatedRoot
+
+        if limb then
+            -- safety: clear stale connection if present
+            if ReplicationConnections[acc] then
+                ReplicationConnections[acc]:Disconnect()
+                ReplicationConnections[acc] = nil
+            end
+
+            ReplicateAccessory(handle, limb, CFrame.new())
+            Recovered = Recovered + 1
+            print("[Refit] Recovered hat:", acc.Name)
+        end
+    end
+
+    if Recovered > 0 then
+        Notification("REANIMITE", "Refit recovered " .. Recovered .. " hats!", 3)
+    end
+end
+
+-- periodic loop
+task.spawn(function()
+    while RefitEnabled do
+        task.wait(RefitInterval or 1.2)
+        pcall(AttemptRefit)
+    end
+end)
+
 return ReanimationModule
 
 
