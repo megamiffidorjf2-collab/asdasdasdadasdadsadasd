@@ -20,6 +20,12 @@ local Stats = game:GetService("Stats")
 local ReplicationTableData = {}
 local ReplicationConnections = {}
 
+local RefitBlacklist         = {}
+local RefitLostCount         = 0
+local RefitThreshold         = 4
+local RefitInterval          = 1.8
+local RefitEnabled           = true
+
 local IsStudio = RunService:IsStudio()
 local PlayerPing = not IsStudio and Stats.Network.ServerStatsItem["Data Ping"] or 0.30
 local RespawnTime = not IsStudio and Players.RespawnTime or 0.5
@@ -116,9 +122,9 @@ local function ReplicateAccessory(Part0: string | number | BasePart, Part1: Base
 
 	if AccessoryHandle == nil then return end
 	local AccessoryKey = AccessoryHandle.Parent
-    if not table.find(RefitBlacklist, AccessoryKey) then
-    table.insert(RefitBlacklist, AccessoryKey)
-end
+	if RefitBlacklist and AccessoryKey and not table.find(RefitBlacklist, AccessoryKey) then
+		table.insert(RefitBlacklist, AccessoryKey)
+	end
 	for Index, Value in ReplicationConnections do
 		   
 		if Index == AccessoryKey then
@@ -126,52 +132,56 @@ end
 			return
 		end	
 	end	
-local function AttemptRefit()
-    if not RefitEnabled or not RefitBlacklist then return end
+	local function AttemptRefit()
+    if not RefitEnabled then return end
 
     RefitLostCount = 0
     local StillAlive = {}
 
-    -- Clean & count
+    -- Clean & count lost hats
     for i = #RefitBlacklist, 1, -1 do
         local acc = RefitBlacklist[i]
         if not acc or not acc.Parent then
-            table.remove(RefitBlacklist, i)
+            table.remove(RefitBlacklist, i)  -- dead forever, remove
         else
             local handle = acc:FindFirstChild("Handle")
-            if not handle or not handle.Parent or handle.Parent ~= acc then
-                RefitLostCount = RefitLostCount + 1
+            if not handle or handle.Parent ~= acc then
+                RefitLostCount += 1
             else
                 table.insert(StillAlive, acc)
             end
         end
     end
 
+    -- If too many lost → try to bring back surviving ones
     if RefitLostCount >= RefitThreshold then
-        Notification("REANIMITE", "Refitting hats... ("..RefitLostCount.." lost)", 4)
+        Notification("REANIMITE", "Refitting hats... ("..RefitLostCount.." lost, recovering)", 4)
 
+        -- Re-attach still-alive accessories to dummy limbs
         for _, acc in StillAlive do
             local handle = acc:FindFirstChild("Handle")
             if handle and handle.Parent == acc then
-                -- Choose best dummy part (you can randomize or cycle)
-                local targets = {"Right Arm", "Left Arm", "Head", "Torso", "RightHand"}
-                local targetName = targets[math.random(1, #targets)]
-                
+                -- Pick a target limb on dummy (prefer arms/head > root)
+                local targetName = "Right Arm"   -- or randomize/cycle: "Left Arm", "Head", etc.
                 local targetPart = ReanimationCharacter:FindFirstChild(targetName)
-                               or ReanimationCharacter.HumanoidRootPart
+                             or ReanimationCharacter:FindFirstChild("RightHand")
+                             or ReanimationCharacter.HumanoidRootPart
 
                 if targetPart then
-                    -- Clean old connection if any
+                    -- Disconnect old if exists (prevents double conn)
                     if ReplicationConnections[acc] then
                         ReplicationConnections[acc]:Disconnect()
                         ReplicationConnections[acc] = nil
                     end
 
-                    -- Re-attach (identity CFrame is ok for recovery)
-                    ReplicateAccessory(handle, targetPart, CFrame.new())
+                    -- Replicate again (use identity or store original offset if you want exact pos)
+                    ReplicateAccessory(handle, targetPart, CFrame.new())  -- tweak CFrame if needed
                 end
             end
         end
+
+        -- Optional extreme: tiny fling dummy root to "wake up" replication
+        -- ReanimationCharacter.HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(0, 30, 0)
     end
 end
 
@@ -506,7 +516,6 @@ local function RefitAccessories()
     end
 end
 return ReanimationModule
-
 
 
 
