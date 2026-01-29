@@ -20,6 +20,12 @@ local Stats = game:GetService("Stats")
 local ReplicationTableData = {}
 local ReplicationConnections = {}
 
+local RefitBlacklist         = {}
+local RefitLostCount         = 0
+local RefitThreshold         = 4
+local RefitInterval          = 1.8
+local RefitEnabled           = true
+
 local IsStudio = RunService:IsStudio()
 local PlayerPing = not IsStudio and Stats.Network.ServerStatsItem["Data Ping"] or 0.30
 local RespawnTime = not IsStudio and Players.RespawnTime or 0.5
@@ -116,9 +122,9 @@ local function ReplicateAccessory(Part0: string | number | BasePart, Part1: Base
 
 	if AccessoryHandle == nil then return end
 	local AccessoryKey = AccessoryHandle.Parent
-    if not table.find(RefitBlacklist, AccessoryKey) then
-    table.insert(RefitBlacklist, AccessoryKey)
-end
+	if RefitBlacklist and AccessoryKey and not table.find(RefitBlacklist, AccessoryKey) then
+		table.insert(RefitBlacklist, AccessoryKey)
+	end
 	for Index, Value in ReplicationConnections do
 		   
 		if Index == AccessoryKey then
