@@ -414,17 +414,16 @@ function ReanimationModule:Reanimate(ReplicationTable)
 	ReanimationHandleRespawning()
 end
 
-return ReanimationModule
--- Refit functionality (adapted for this Reanimite version)
-local RefitEnabled = true  -- Вкл/выкл
-local RefitThreshold = 6   -- Авто-refit при > этого количества аксессуаров (подбери под свои шляпы)
+-- Refit functionality (adapted from Krypton, safe for Reanimite)
+local Refit = true  -- Включить/выключить (true = включено)
+local RefitCount = 6  -- Лимит аксессуаров для авто-refit (подбери под свои шляпы)
 
-local RefitDone = false
+local Refitted = false  -- Для одноразового авто-триггера
 
-local function DoRefit()
-	if not RefitEnabled or not ReanimationCharacter or not ReanimationCharacter.Parent then return end
+local function RefitRig()
+	if not Refit or not ReanimationCharacter or not ReanimationCharacter.Parent then return end
 	
-	-- Зелёный флэш только на body-партах dummy (не трогаем HRP и Handle)
+	-- Только body-парты (не HRP и не Handle шляп)
 	for _, part in ReanimationCharacter:GetChildren() do
 		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
 			part.Transparency = 0.5
@@ -432,14 +431,14 @@ local function DoRefit()
 		end
 	end
 	
-	-- Файрим died-сигнал (основной трюк refit)
+	-- Безопасный died-сигнал
 	if replicatesignal and Player and Player.ConnectDiedSignalBackend then
 		replicatesignal(Player.ConnectDiedSignalBackend)
 	end
 	
-	Notification("REANIMITE - Refit", "Refit triggered — hats should realign!", 5)
+	Notification("REANIMITE - Refit", "Refit triggered! Hats should realign now.", 5)
 	
-	-- Сбрасываем визуал через 1.5 сек
+	-- Флэш обратно в invisible
 	task.delay(1.5, function()
 		if ReanimationCharacter and ReanimationCharacter.Parent then
 			for _, part in ReanimationCharacter:GetChildren() do
@@ -451,27 +450,25 @@ local function DoRefit()
 	end)
 end
 
--- Авто-refit при большом количестве шляп
+-- Авто-refit один раз
 task.spawn(function()
 	while task.wait(0.5) do
-		if RefitEnabled and not RefitDone and ReanimationCharacter and ReplicationTableData then
-			if #ReplicationTableData > RefitThreshold then
-				DoRefit()
-				RefitDone = true
+		if Refit and not Refitted and ReanimationCharacter and ReanimationCharacter.Parent then
+			local TotalAccessories = ReplicationTableData and #ReplicationTableData or 0
+			if TotalAccessories > RefitCount then
+				RefitRig()
+				Refitted = true
 				break
 			end
 		end
 	end
 end)
 
--- Ручной вызов
+-- Ручные методы
 function ReanimationModule:Refit()
-	DoRefit()
+	RefitRig()
 end
-
-ReanimationModule.InstantRefit = DoRefit
-
--- Если хочешь InstantRefit как в Krypton
 
 ReanimationModule.InstantRefit = RefitRig
 
+return ReanimationModule
