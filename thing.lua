@@ -116,9 +116,11 @@ local function ReplicateAccessory(Part0: string | number | BasePart, Part1: Base
 
 	if AccessoryHandle == nil then return end
 	local AccessoryKey = AccessoryHandle.Parent
-
+    if not table.find(RefitBlacklist, AccessoryKey) then
+    table.insert(RefitBlacklist, AccessoryKey)
+end
 	for Index, Value in ReplicationConnections do
-		
+		   
 		if Index == AccessoryKey then
 			warn("already rep", AccessoryKey)
 			return
@@ -456,4 +458,5 @@ local function RefitAccessories()
     end
 end
 return ReanimationModule
+
 
