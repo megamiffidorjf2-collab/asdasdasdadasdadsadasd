@@ -20,10 +20,11 @@ local Stats = game:GetService("Stats")
 local ReplicationTableData = {}
 local ReplicationConnections = {}
 
+local OriginalOffsets = {}
 local RefitBlacklist         = {}
 local RefitLostCount         = 0
 local RefitThreshold         = 4
-local RefitInterval          = 1.2
+local RefitInterval          = 2.0
 local RefitEnabled           = true
 
 local IsStudio = RunService:IsStudio()
@@ -122,6 +123,12 @@ local function ReplicateAccessory(Part0: string | number | BasePart, Part1: Base
 
 	if AccessoryHandle == nil then return end
 	local AccessoryKey = AccessoryHandle.Parent
+	-- Store original offset for refit recovery
+	OriginalOffsets[AccessoryKey] = {
+	    Part1 = Part1,
+	    Transform = AccessoryTransform
+	}
+
 	if RefitBlacklist and AccessoryKey and not table.find(RefitBlacklist, AccessoryKey) then
 		table.insert(RefitBlacklist, AccessoryKey)
 	end
@@ -523,56 +530,55 @@ local function AttemptRefit()
     local ReanimatedRoot = ReanimationCharacter:FindFirstChild("HumanoidRootPart")
     if not ReanimatedRoot then return end
 
-    local Recovered = 0
-    local AlreadyConnected = {}
+    local recovered = 0
 
-    for accKey in pairs(ReplicationConnections) do
-        AlreadyConnected[accKey] = true
-    end
-
-    local accessories = Humanoid and Humanoid:GetAccessories() or {}
-    for _, acc in ipairs(accessories) do
+    for _, acc in ipairs(Humanoid:GetAccessories()) do
         local handle = acc:FindFirstChild("Handle")
-        if not handle or handle.Parent ~= acc then
-            continue
+        if not handle or handle.Parent ~= acc then continue end
+
+        local accKey = acc
+
+        if ReplicationConnections[accKey] then continue end
+
+        local stored = OriginalOffsets[accKey]
+        local targetPart = (stored and stored.Part1 and stored.Part1.Parent) or ReanimatedRoot
+        if not targetPart then continue end
+
+        local transform = stored and stored.Transform or CFrame.new()
+
+        -- Clean any ghost conn (rare but safety)
+        if ReplicationConnections[accKey] then
+            ReplicationConnections[accKey]:Disconnect()
+            ReplicationConnections[accKey] = nil
         end
 
-        if AlreadyConnected[acc] then
-            continue
-        end
+        -- Replicate with original offset
+        ReplicateAccessory(handle, targetPart, transform)
 
-        -- pick a random limb on the dummy
-        local limbNames = {"Right Arm", "Left Arm", "Right Leg", "Left Leg", "Torso", "Head"}
-        local limb = nil
-        for i = 1, #limbNames do
-            local try = ReanimationCharacter:FindFirstChild(limbNames[math.random(1, #limbNames)])
-            if try then limb = try break end
-        end
-        limb = limb or ReanimatedRoot
-
-        if limb then
-            -- safety: clear stale connection if present
-            if ReplicationConnections[acc] then
-                ReplicationConnections[acc]:Disconnect()
-                ReplicationConnections[acc] = nil
-            end
-
-            ReplicateAccessory(handle, limb, CFrame.new())
-            Recovered = Recovered + 1
-            print("[Refit] Recovered hat:", acc.Name)
-        end
+        recovered = recovered + 1
+        print("[Refit] Recovered:", acc.Name, "->", targetPart.Name)
     end
 
-    if Recovered > 0 then
-        Notification("REANIMITE", "Refit recovered " .. Recovered .. " hats!", 3)
+    if recovered > 0 then
+        Notification("REANIMITE", "Refit recovered " .. recovered .. " hats", 3)
+
+        -- Gentle wake-up pulse (helps replication sync without breaking rig)
+        local root = ReanimationCharacter:FindFirstChild("HumanoidRootPart")
+        if root then
+            root.AssemblyLinearVelocity = Vector3.new(0, 20, 0)
+            task.delay(0.1, function()
+                if root then root.AssemblyLinearVelocity = Vector3.zero end
+            end)
+        end
     end
 end
 
 -- periodic loop
 task.spawn(function()
+    task.wait(3)
     while RefitEnabled do
-        task.wait(RefitInterval or 1.2)
         pcall(AttemptRefit)
+        task.wait(RefitInterval)
     end
 end)
 
