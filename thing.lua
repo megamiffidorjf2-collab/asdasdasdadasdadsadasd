@@ -415,56 +415,64 @@ function ReanimationModule:Reanimate(ReplicationTable)
 end
 
 return ReanimationModule
--- Refit functionality (adapted from Krypton)
-local Refit = true  -- Включи/выключи refit (true = включено)
-local RefitCount = 4  -- Лимит аксессуаров, после которого автоматически сработает refit (подбери под себя, в Krypton по умолчанию 2)
+-- Refit functionality (adapted from Krypton, safe for Reanimite)
+local Refit = true  -- Включить/выключить (true = включено)
+local RefitCount = 6  -- Лимит аксессуаров, после которого авто-refit (подбери: 4-8, зависит от количества шляп)
+
+local Refitted = false  -- Чтобы сработало только один раз автоматически
 
 local function RefitRig()
-	if not ReanimationCharacter or not ReanimationCharacter.Parent then return end
+	if not Refit or not ReanimationCharacter or not ReanimationCharacter.Parent then return end
 	
-	-- Делаем тело dummy полупрозрачным зелёным (как в Krypton)
-	for _, descendant in ReanimationCharacter:GetDescendants() do
-		if descendant:IsA("BasePart") and descendant.Name ~= "HumanoidRootPart" then  -- Не трогаем HRP, чтобы не сломать
-			descendant.Transparency = 0.5
-			descendant.BrickColor = BrickColor.new("Forest green")
+	-- Делаем только body-парты полупрозрачными зелёными (не трогаем HRP и Handle шляп)
+	for _, part in ReanimationCharacter:GetChildren() do
+		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+			part.Transparency = 0.5
+			part.BrickColor = BrickColor.new("Forest green")
 		end
 	end
 	
-	-- Файрим died signal (помогает "перезагрузить" аксессуары)
-	replicatesignal(Player.ConnectDiedSignalBackend)
+	-- Безопасно файрим died-сигнал (как в оригинальном Reanimite)
+	if replicatesignal and Player and Player.ConnectDiedSignalBackend then
+		replicatesignal(Player.ConnectDiedSignalBackend)
+	end
 	
-	Notification("REANIMITE - Refit", "Refit triggered! Hats should adjust now.", 5)
+	Notification("REANIMITE - Refit", "Refit triggered! Hats should realign now.", 5)
 	
-	-- Опционально: возвращаем нормальный вид через пару секунд (чтобы не оставалось зелёным навсегда)
-	task.delay(2, function()
+	-- Возвращаем invisible через 1.5 секунды (как краткий флэш)
+	task.delay(1.5, function()
 		if ReanimationCharacter and ReanimationCharacter.Parent then
-			for _, descendant in ReanimationCharacter:GetDescendants() do
-				if descendant:IsA("BasePart") and descendant.Name ~= "HumanoidRootPart" then
-					descendant.Transparency = 1
-					descendant.BrickColor = BrickColor.new("Medium stone grey")  -- Или оригинальный цвет, если нужно
+			for _, part in ReanimationCharacter:GetChildren() do
+				if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+					part.Transparency = 1  -- Invisible, как в оригинальном dummy
+					-- Цвет не сбрасываем — при trans=1 не видно
 				end
 			end
 		end
 	end)
 end
 
--- Автоматический вызов refit при большом количестве аксессуаров
+-- Автоматический refit (один раз, когда превысит лимит)
 task.spawn(function()
-	while task.wait(1) do
-		if Refit and ReanimationCharacter and ReanimationCharacter.Parent then
-			local TotalAccessories = #ReplicationTableData
+	while task.wait(0.5) do  -- Проверяем часто, но не спамим
+		if Refit and not Refitted and ReanimationCharacter and ReanimationCharacter.Parent then
+			local TotalAccessories = ReplicationTableData and #ReplicationTableData or 0
 			if TotalAccessories > RefitCount then
 				RefitRig()
-				break  -- Один раз сработает, дальше можно вызвать вручную
+				Refitted = true
+				break  -- Больше не проверяем автоматически
 			end
 		end
 	end
 end)
 
--- Ручной вызов (например, из loader или по команде)
+-- Ручной вызов
 function ReanimationModule:Refit()
 	RefitRig()
 end
 
+ReanimationModule.InstantRefit = RefitRig  -- Как в Krypton
+
 -- Если хочешь InstantRefit как в Krypton
+
 ReanimationModule.InstantRefit = RefitRig
