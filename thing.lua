@@ -25,7 +25,8 @@ local LastRefitTime = {}
 local RefitBlacklist         = {}
 local RefitLostCount         = 0
 local RefitThreshold         = 4
-local RefitInterval          = 4.0
+local RefitInterval          = 5.0
+local RefitPerCycle          = 1
 local RefitEnabled           = true
 
 local IsStudio = RunService:IsStudio()
@@ -140,57 +141,7 @@ local function ReplicateAccessory(Part0: string | number | BasePart, Part1: Base
 			return
 		end	
 	end	
-	local function AttemptRefit()
-    if not RefitEnabled then return end
-    if not ReanimationCharacter or not ReanimationCharacter.Parent then return end
-
-    local ReanimatedRoot = ReanimationCharacter:FindFirstChild("HumanoidRootPart")
-    if not ReanimatedRoot then return end
-
-    local Recovered = 0
-    local AlreadyConnected = {}
-
-    for accKey in pairs(ReplicationConnections) do
-        AlreadyConnected[accKey] = true
-    end
-
-    local accessories = Humanoid and Humanoid:GetAccessories() or {}
-    for _, acc in ipairs(accessories) do
-        local handle = acc:FindFirstChild("Handle")
-        if not handle or handle.Parent ~= acc then
-            continue
-        end
-
-        if AlreadyConnected[acc] then
-            continue
-        end
-
-        -- pick a random limb on the dummy
-        local limbNames = {"Right Arm", "Left Arm", "Right Leg", "Left Leg", "Torso", "Head"}
-        local limb = nil
-        for i = 1, #limbNames do
-            local try = ReanimationCharacter:FindFirstChild(limbNames[math.random(1, #limbNames)])
-            if try then limb = try break end
-        end
-        limb = limb or ReanimatedRoot
-
-        if limb then
-            -- safety: clear stale connection if present
-            if ReplicationConnections[acc] then
-                ReplicationConnections[acc]:Disconnect()
-                ReplicationConnections[acc] = nil
-            end
-
-            ReplicateAccessory(handle, limb, CFrame.new())
-            Recovered = Recovered + 1
-            print("[Refit] Recovered hat:", acc.Name)
-        end
-    end
-
-    if Recovered > 0 then
-        Notification("REANIMITE", "Refit recovered " .. Recovered .. " hats!", 3)
-    end
-end
+	-- nested AttemptRefit removed to avoid aggressive re-entrancy
 
 	ReplicationConnections[AccessoryKey] = RunService.Heartbeat:Connect(function()
 		local Part0Exists, Part1Exists = ValidateParts(AccessoryHandle, Part1)
@@ -523,10 +474,36 @@ local function RefitAccessories()
     end
 end
 
+-- helper: detect obvious rig collapse
+local function IsRigCollapsed()
+    if not ReanimationCharacter or not ReanimationCharacter.Parent then return true end
+    local torso = ReanimationCharacter:FindFirstChild("Torso") or ReanimationCharacter:FindFirstChild("UpperTorso")
+    local root  = ReanimationCharacter:FindFirstChild("HumanoidRootPart")
+    if not torso or not root then return true end
+    -- if limbs are all very close to torso center, consider collapsed
+    local collapsedCount = 0
+    local limbNames = {"Right Arm","Left Arm","Right Leg","Left Leg","Head"}
+    for _, name in ipairs(limbNames) do
+        local p = ReanimationCharacter:FindFirstChild(name)
+        if p and p:IsA("BasePart") then
+            if (p.Position - torso.Position).Magnitude < 0.5 then
+                collapsedCount = collapsedCount + 1
+            end
+        end
+    end
+    -- if 3 or more limbs are collapsed, consider rig broken
+    return collapsedCount >= 3
+end
+
 -- Improved refit routine: periodically scan the real character's accessories and re-replicate any surviving hats
 local function AttemptRefit()
     if not RefitEnabled then return end
     if not ReanimationCharacter or not ReanimationCharacter.Parent then return end
+
+    if IsRigCollapsed() then
+        warn("[Refit] Rig collapsed - skipping refit to avoid further damage")
+        return
+    end
 
     local ReanimatedRoot = ReanimationCharacter:FindFirstChild("HumanoidRootPart")
     if not ReanimatedRoot then return end
@@ -574,6 +551,11 @@ local function AttemptRefit()
 
         recovered = recovered + 1
         print("[Refit] Recovered:", acc.Name, "->", targetPart.Name)
+
+        -- limit how many hats we reattach per cycle to reduce stress
+        if recovered >= RefitPerCycle then
+            break
+        end
     end
 
     if recovered > 0 then
