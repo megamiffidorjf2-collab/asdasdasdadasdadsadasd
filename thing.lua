@@ -415,16 +415,16 @@ function ReanimationModule:Reanimate(ReplicationTable)
 end
 
 return ReanimationModule
--- Refit functionality (adapted from Krypton, safe for Reanimite)
-local Refit = true  -- Включить/выключить (true = включено)
-local RefitCount = 6  -- Лимит аксессуаров, после которого авто-refit (подбери: 4-8, зависит от количества шляп)
+-- Refit functionality (adapted for this Reanimite version)
+local RefitEnabled = true  -- Вкл/выкл
+local RefitThreshold = 6   -- Авто-refit при > этого количества аксессуаров (подбери под свои шляпы)
 
-local Refitted = false  -- Чтобы сработало только один раз автоматически
+local RefitDone = false
 
-local function RefitRig()
-	if not Refit or not ReanimationCharacter or not ReanimationCharacter.Parent then return end
+local function DoRefit()
+	if not RefitEnabled or not ReanimationCharacter or not ReanimationCharacter.Parent then return end
 	
-	-- Делаем только body-парты полупрозрачными зелёными (не трогаем HRP и Handle шляп)
+	-- Зелёный флэш только на body-партах dummy (не трогаем HRP и Handle)
 	for _, part in ReanimationCharacter:GetChildren() do
 		if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
 			part.Transparency = 0.5
@@ -432,35 +432,33 @@ local function RefitRig()
 		end
 	end
 	
-	-- Безопасно файрим died-сигнал (как в оригинальном Reanimite)
+	-- Файрим died-сигнал (основной трюк refit)
 	if replicatesignal and Player and Player.ConnectDiedSignalBackend then
 		replicatesignal(Player.ConnectDiedSignalBackend)
 	end
 	
-	Notification("REANIMITE - Refit", "Refit triggered! Hats should realign now.", 5)
+	Notification("REANIMITE - Refit", "Refit triggered — hats should realign!", 5)
 	
-	-- Возвращаем invisible через 1.5 секунды (как краткий флэш)
+	-- Сбрасываем визуал через 1.5 сек
 	task.delay(1.5, function()
 		if ReanimationCharacter and ReanimationCharacter.Parent then
 			for _, part in ReanimationCharacter:GetChildren() do
 				if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
-					part.Transparency = 1  -- Invisible, как в оригинальном dummy
-					-- Цвет не сбрасываем — при trans=1 не видно
+					part.Transparency = 1
 				end
 			end
 		end
 	end)
 end
 
--- Автоматический refit (один раз, когда превысит лимит)
+-- Авто-refit при большом количестве шляп
 task.spawn(function()
-	while task.wait(0.5) do  -- Проверяем часто, но не спамим
-		if Refit and not Refitted and ReanimationCharacter and ReanimationCharacter.Parent then
-			local TotalAccessories = ReplicationTableData and #ReplicationTableData or 0
-			if TotalAccessories > RefitCount then
-				RefitRig()
-				Refitted = true
-				break  -- Больше не проверяем автоматически
+	while task.wait(0.5) do
+		if RefitEnabled and not RefitDone and ReanimationCharacter and ReplicationTableData then
+			if #ReplicationTableData > RefitThreshold then
+				DoRefit()
+				RefitDone = true
+				break
 			end
 		end
 	end
@@ -468,11 +466,12 @@ end)
 
 -- Ручной вызов
 function ReanimationModule:Refit()
-	RefitRig()
+	DoRefit()
 end
 
-ReanimationModule.InstantRefit = RefitRig  -- Как в Krypton
+ReanimationModule.InstantRefit = DoRefit
 
 -- Если хочешь InstantRefit как в Krypton
 
 ReanimationModule.InstantRefit = RefitRig
+
