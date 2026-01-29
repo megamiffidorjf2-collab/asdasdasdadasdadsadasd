@@ -21,12 +21,12 @@ local ReplicationTableData = {}
 local ReplicationConnections = {}
 
 local OriginalOffsets = {}
-local OriginalHatData = {}
+local OriginalHatInfo = {}
 local LastRefitTime = {}
 local RefitBlacklist         = {}
 local RefitLostCount         = 0
 local RefitThreshold         = 4
-local RefitInterval          = 3.5
+local RefitInterval          = 4
 local RefitPerCycle          = 1
 local RefitEnabled           = true
 
@@ -131,12 +131,11 @@ local function ReplicateAccessory(Part0: string | number | BasePart, Part1: Base
 	    Part1 = Part1,
 	    Transform = AccessoryTransform
 	}
-	-- also store simplified hat data for stable refit
-	if not OriginalHatData[AccessoryKey] then
-	    OriginalHatData[AccessoryKey] = {
-	        Handle = AccessoryHandle,
+	-- Store simplified hat info for stable refit (only once)
+	if not OriginalHatInfo[AccessoryKey] then
+	    OriginalHatInfo[AccessoryKey] = {
 	        OriginalPart1 = Part1,
-	        OriginalTransform = AccessoryTransform
+	        OriginalTransform = AccessoryTransform or CFrame.new()
 	    }
 	end
 
@@ -508,33 +507,39 @@ end
 local function AttemptRefit()
     if not RefitEnabled then return end
 
-    local reanimatedRoot = ReanimationCharacter and ReanimationCharacter:FindFirstChild("HumanoidRootPart")
-    if not reanimatedRoot then return end
-
     local recovered = 0
+    local rootPart = ReanimationCharacter and ReanimationCharacter:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return end
 
-    for _, acc in ipairs(Humanoid:GetAccessories()) do
-        local handle = acc:FindFirstChild("Handle")
-        if not handle or handle.Parent ~= acc then continue end
-
-        -- skip if already replicating
-        if ReplicationConnections[acc] then continue end
-
-        local data = OriginalHatData[acc]
-        local targetPart = (data and data.OriginalPart1 and data.OriginalPart1.Parent and data.OriginalPart1:IsDescendantOf(ReanimationCharacter)) and data.OriginalPart1 or reanimatedRoot
-
-        if not targetPart then continue end
-
-        -- clean any ghost connection
-        if ReplicationConnections[acc] then
-            ReplicationConnections[acc]:Disconnect()
-            ReplicationConnections[acc] = nil
+    for _, accessory in ipairs(Humanoid:GetAccessories()) do
+        local handle = accessory:FindFirstChild("Handle")
+        if not handle or handle.Parent ~= accessory then
+            continue
         end
 
-        ReplicateAccessory(handle, targetPart, data and data.OriginalTransform or CFrame.new())
+        -- Already replicating? Skip to avoid dupes
+        if ReplicationConnections[accessory] then continue end
+
+        local info = OriginalHatInfo[accessory]
+        local targetLimb = info and info.OriginalPart1
+
+        -- Fallback only if original limb missing
+        if not targetLimb or not targetLimb.Parent or not targetLimb:IsDescendantOf(ReanimationCharacter) then
+            targetLimb = rootPart
+        end
+
+        -- Clean any stale conn
+        if ReplicationConnections[accessory] then
+            ReplicationConnections[accessory]:Disconnect()
+            ReplicationConnections[accessory] = nil
+        end
+
+        -- Replicate with original offset
+        local transform = info and info.OriginalTransform or CFrame.new()
+        ReplicateAccessory(handle, targetLimb, transform)
 
         recovered = recovered + 1
-        print("[Refit] Brought back:", acc.Name)
+        print("[Refit] Recovered hat:", accessory.Name, "on", targetLimb.Name)
 
         if recovered >= RefitPerCycle then
             break
@@ -542,13 +547,13 @@ local function AttemptRefit()
     end
 
     if recovered > 0 then
-        Notification("REANIMITE", "Refit recovered " .. recovered .. " hats", 4)
+        Notification("REANIMITE", "Refit recovered " .. recovered .. " hats!", 4)
     end
 end
 
 -- periodic loop
 task.spawn(function()
-    task.wait(4)
+    task.wait(5)
     while RefitEnabled do
         pcall(AttemptRefit)
         task.wait(RefitInterval)
