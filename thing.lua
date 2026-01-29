@@ -21,10 +21,11 @@ local ReplicationTableData = {}
 local ReplicationConnections = {}
 
 local OriginalOffsets = {}
+local LastRefitTime = {}
 local RefitBlacklist         = {}
 local RefitLostCount         = 0
 local RefitThreshold         = 4
-local RefitInterval          = 2.0
+local RefitInterval          = 4.0
 local RefitEnabled           = true
 
 local IsStudio = RunService:IsStudio()
@@ -531,6 +532,7 @@ local function AttemptRefit()
     if not ReanimatedRoot then return end
 
     local recovered = 0
+    local now = os.clock()
 
     for _, acc in ipairs(Humanoid:GetAccessories()) do
         local handle = acc:FindFirstChild("Handle")
@@ -538,10 +540,23 @@ local function AttemptRefit()
 
         local accKey = acc
 
+        -- per-hat cooldown to avoid rapid reattach (3s)
+        if LastRefitTime[accKey] and now - LastRefitTime[accKey] < 3 then
+            continue
+        end
+
+        -- Already replicating? Skip (prevents dupes)
         if ReplicationConnections[accKey] then continue end
 
         local stored = OriginalOffsets[accKey]
-        local targetPart = (stored and stored.Part1 and stored.Part1.Parent) or ReanimatedRoot
+        local targetPart = nil
+        if stored and stored.Part1 and stored.Part1.Parent and stored.Part1:IsDescendantOf(ReanimationCharacter) then
+            targetPart = stored.Part1
+        else
+            -- prefer not to attach to root unless original missing
+            targetPart = ReanimatedRoot
+        end
+
         if not targetPart then continue end
 
         local transform = stored and stored.Transform or CFrame.new()
@@ -555,6 +570,8 @@ local function AttemptRefit()
         -- Replicate with original offset
         ReplicateAccessory(handle, targetPart, transform)
 
+        LastRefitTime[accKey] = os.clock()
+
         recovered = recovered + 1
         print("[Refit] Recovered:", acc.Name, "->", targetPart.Name)
     end
@@ -562,13 +579,13 @@ local function AttemptRefit()
     if recovered > 0 then
         Notification("REANIMITE", "Refit recovered " .. recovered .. " hats", 3)
 
-        -- Gentle wake-up pulse (helps replication sync without breaking rig)
-        local root = ReanimationCharacter:FindFirstChild("HumanoidRootPart")
-        if root then
-            root.AssemblyLinearVelocity = Vector3.new(0, 20, 0)
-            task.delay(0.1, function()
-                if root then root.AssemblyLinearVelocity = Vector3.zero end
-            end)
+        -- Stabilize dummy parts to avoid fling/collapse
+        for _, part in ipairs(ReanimationCharacter:GetDescendants()) do
+            if part:IsA("BasePart") and part ~= ReanimationCharacter:FindFirstChild("HumanoidRootPart") then
+                part.AssemblyLinearVelocity = Vector3.zero
+                part.AssemblyAngularVelocity = Vector3.zero
+                pcall(function() part.Velocity = Vector3.zero end)
+            end
         end
     end
 end
