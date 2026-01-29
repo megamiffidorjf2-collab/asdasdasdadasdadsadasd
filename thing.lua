@@ -126,56 +126,52 @@ end
 			return
 		end	
 	end	
-	local function AttemptRefit()
-    if not RefitEnabled then return end
+local function AttemptRefit()
+    if not RefitEnabled or not RefitBlacklist then return end
 
     RefitLostCount = 0
     local StillAlive = {}
 
-    -- Clean & count lost hats
+    -- Clean & count
     for i = #RefitBlacklist, 1, -1 do
         local acc = RefitBlacklist[i]
         if not acc or not acc.Parent then
-            table.remove(RefitBlacklist, i)  -- dead forever, remove
+            table.remove(RefitBlacklist, i)
         else
             local handle = acc:FindFirstChild("Handle")
-            if not handle or handle.Parent ~= acc then
-                RefitLostCount += 1
+            if not handle or not handle.Parent or handle.Parent ~= acc then
+                RefitLostCount = RefitLostCount + 1
             else
                 table.insert(StillAlive, acc)
             end
         end
     end
 
-    -- If too many lost → try to bring back surviving ones
     if RefitLostCount >= RefitThreshold then
-        Notification("REANIMITE", "Refitting hats... ("..RefitLostCount.." lost, recovering)", 4)
+        Notification("REANIMITE", "Refitting hats... ("..RefitLostCount.." lost)", 4)
 
-        -- Re-attach still-alive accessories to dummy limbs
         for _, acc in StillAlive do
             local handle = acc:FindFirstChild("Handle")
             if handle and handle.Parent == acc then
-                -- Pick a target limb on dummy (prefer arms/head > root)
-                local targetName = "Right Arm"   -- or randomize/cycle: "Left Arm", "Head", etc.
+                -- Choose best dummy part (you can randomize or cycle)
+                local targets = {"Right Arm", "Left Arm", "Head", "Torso", "RightHand"}
+                local targetName = targets[math.random(1, #targets)]
+                
                 local targetPart = ReanimationCharacter:FindFirstChild(targetName)
-                             or ReanimationCharacter:FindFirstChild("RightHand")
-                             or ReanimationCharacter.HumanoidRootPart
+                               or ReanimationCharacter.HumanoidRootPart
 
                 if targetPart then
-                    -- Disconnect old if exists (prevents double conn)
+                    -- Clean old connection if any
                     if ReplicationConnections[acc] then
                         ReplicationConnections[acc]:Disconnect()
                         ReplicationConnections[acc] = nil
                     end
 
-                    -- Replicate again (use identity or store original offset if you want exact pos)
-                    ReplicateAccessory(handle, targetPart, CFrame.new())  -- tweak CFrame if needed
+                    -- Re-attach (identity CFrame is ok for recovery)
+                    ReplicateAccessory(handle, targetPart, CFrame.new())
                 end
             end
         end
-
-        -- Optional extreme: tiny fling dummy root to "wake up" replication
-        -- ReanimationCharacter.HumanoidRootPart.AssemblyLinearVelocity = Vector3.new(0, 30, 0)
     end
 end
 
@@ -510,6 +506,7 @@ local function RefitAccessories()
     end
 end
 return ReanimationModule
+
 
 
 
