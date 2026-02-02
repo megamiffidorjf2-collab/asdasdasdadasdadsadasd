@@ -1,566 +1,247 @@
---[[
-	Made by ches (@FRAGBOMBBLITZ)
- 	See Loader for docs
+local Settings = ...
+	or { Collisions = false, Simulate_Physics_On_LocalPlayer_Only = false, ForceAllRigs = false, Only_Others = false }
+-- ForceAllRigs is basically forcing the changes on all humanoids that it finds
 
-	Discord Server:
-	https://discord.gg/Ud6zrfuhAK
+--[[
+	Originally Created by:
+	'With love and lust from "V" / Ukiyo'
+
+	Re-written & Optimized by:
+	Deuces
 ]]
 
+local function Load(Source, DebugName, ...)
+	return loadstring(game:HttpGet(Source, true), DebugName)(...)
+end
 
-local ReanimationModule = {}
-local ReanimationCharacter = nil
+local SpringClass = Load(
+	"https://raw.githubusercontent.com/megamiffidorjf2-collab/asdasdasdadasdadsadasd/refs/heads/main/Spring.lua",
+	"Spring"
+)
+local FemaleRig = Load(
+	"https://raw.githubusercontent.com/megamiffidorjf2-collab/asdasdasdadasdadsadasd/refs/heads/main/FemaleRig.luau",
+	"FemaleRig",
+	Settings.Collisions
+)
+local finder, globalcontainer =
+	Load("https://raw.githubusercontent.com/lua-u/SomeHub/main/UniversalMethodFinder.luau", "UniversalMethodFinder")
 
-local InsertService = game:GetService("InsertService")
-local TweenService = game:GetService("TweenService")
-local StarterGui = game:GetService("StarterGui")
+finder({
+	protgui = '(...):find("protect") and (...):find("gui") and not (...):find("un")',
+})
+
+local function RandomString()
+	local randomarray = {}
+	for i = 1, math.random(10, 20) do
+		randomarray[i] = string.char(math.random(32, 126))
+	end
+	return table.concat(randomarray)
+end
+local function Protect(instance)
+	instance.Name = RandomString()
+	for _, desc in ipairs(instance:GetDescendants()) do -- not sure if its worth to protgui (it also works on instances not just guis)  every descendant as in documentation it says it protects "instance and all it's children" not descendants however, but I would assume it does. You could always add it below for extra security and execution-lag :) (Deuces)
+		desc.Name = RandomString()
+	end
+
+	if globalcontainer.protgui and not (is_sirhurt_closure or (syn and DrawingImmediate)) then --sirhurt is retarded
+		globalcontainer.protgui(instance)
+	end
+end
+
+local function Weld(p0, p1)
+	local weld = Instance.new("Weld")
+
+	weld.Part0 = p0
+	weld.Part1 = p1
+	weld.Parent = p0
+	return weld
+end
+
+local function DressUp(Model, NewModel)
+	local Shirt, Pants = Model:FindFirstChildOfClass("Shirt"), Model:FindFirstChildOfClass("Pants")
+	Shirt = Shirt and Shirt.ShirtTemplate
+	Pants = Pants and Pants.PantsTemplate
+
+	for _, desc in ipairs(NewModel:GetDescendants()) do
+		if desc:IsA("Decal") then
+			desc.Texture = (desc.Name == "Shirt" and Shirt or desc.Name == "Pants" and Pants or "")
+		end
+	end
+end
+
+local function ApplyRig(Model, R6)
+	local Parts = {}
+	if R6 then
+		Parts.Torso = "Torso"
+		Parts.RightLeg = "Right Leg"
+		Parts.LeftLeg = "Left Leg"
+	else
+		Parts.Torso = "UpperTorso"
+		Parts.RightLeg = "RightUpperLeg"
+		Parts.LeftLeg = "LeftUpperLeg"
+	end
+	Parts.Torso = Model:WaitForChild(Parts.Torso, math.huge)
+	Parts.RightLeg = Model:WaitForChild(Parts.RightLeg, math.huge)
+	Parts.LeftLeg = Model:WaitForChild(Parts.LeftLeg, math.huge)
+	local NewModel = FemaleRig:Clone()
+	local NewParts = {
+		Torso = NewModel.T.Torso,
+		RightLeg = NewModel.R["Right Leg"],
+		LeftLeg = NewModel.L["Left Leg"],
+	}
+
+	NewParts.Torso.Color = Parts.Torso.Color
+	NewParts.Torso.Part.BRSTVisual.Color = Parts.Torso.Color
+
+	NewParts.Torso.Model.RightCHK.Color = Parts.RightLeg.Color
+
+	NewParts.Torso.Model.LeftCHK.Color = Parts.LeftLeg.Color
+	if R6 then
+		NewParts.RightLeg.Color = Parts.RightLeg.Color
+		NewParts.LeftLeg.Color = Parts.LeftLeg.Color
+	else
+		NewParts.RightLeg = nil
+		NewParts.LeftLeg = nil
+	end
+	DressUp(Model, NewModel)
+
+	-- added stuff. (Ukiyo)
+	Model.ChildAdded:Connect(function(child)
+		if child:IsA("Clothing") then
+			DressUp(Model, NewModel)
+		end
+	end)
+
+	for name, part in next, NewParts do
+		Weld(part, Parts[name])
+		Parts[name].Transparency = 1
+	end
+	NewParts.BJJ = NewParts.Torso.BUJ.BJJ
+	NewParts.BJ = NewParts.Torso.BTJ.BJ
+	Protect(NewModel)
+	NewModel.Parent = Model
+	return NewParts
+end
+
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
-local Stats = game:GetService("Stats")
+local LocalPlayer = Players.LocalPlayer
 
-local ReplicationTableData = {}
-local ReplicationConnections = {}
-
-local OriginalOffsets = {}
-local OriginalHatInfo = {}
-local LastRefitTime = {}
-local RefitBlacklist         = {}
-local RefitLostCount         = 0
-local RefitThreshold         = 4
-local RefitInterval          = 4
-local RefitPerCycle          = 1
-local RefitEnabled           = true
-
-local IsStudio = RunService:IsStudio()
-local PlayerPing = not IsStudio and Stats.Network.ServerStatsItem["Data Ping"] or 0.30
-local RespawnTime = not IsStudio and Players.RespawnTime or 0.5
-
-local Player = Players.LocalPlayer
-local Camera = workspace.CurrentCamera
-local Character = Player.Character or Player.CharacterAdded:Wait()
-local Humanoid = Character:FindFirstChildOfClass("Humanoid")
-
-local function GetPlayerPing()
-	return not IsStudio and PlayerPing:GetValue() / 2500 or 0
+while not LocalPlayer do
+	Players.ChildAdded:Wait()
+	LocalPlayer = Players.LocalPlayer
 end
 
-local function Notification(Title, Text, Duration)
-	StarterGui:SetCore("SendNotification",{Title = Title or "", Text = Text or "", Duration = Duration or 5})
-end
+local function JigglePhysics(NewParts) -- I've no idea what is happening here (Deuces)
+	local Torso = NewParts.Torso
 
-if not replicatesignal then
-	Notification("REANIMITE", "Your executor does not support replicatesignal :(")
-	return
-end
+	local A = NewParts.BJ
+	local SJ = NewParts.BJJ
 
-local function GetAccessoryNameFromId(AssetId: number)
-	local Model = not IsStudio and game:GetObjects("rbxassetid://"..AssetId)[1] or game:GetService("ReplicatedStorage").LoadAsset:InvokeServer(AssetId)
-	local AccessoryName = IsStudio and Model:FindFirstChildOfClass("Accessory").Name or Model.Name
+	local OGC0 = SJ.C0
+	local OGC02 = A.C0
+	local OGY = Torso.Position.Y
 
-	Model:Destroy()
-	return AccessoryName
-end
+	local BRSTSpring = SpringClass.new()
+	BRSTSpring.Target = 5
+	BRSTSpring.Speed = 10
+	BRSTSpring.Damper = 0.2
 
-local function GetAccessoryFromId(AssetId: number)
-	if Character:FindFirstChild(AssetId) then print("test 444"); return Character:FindFirstChild(AssetId) end
-	
-	local HumanoidAccessories = Humanoid:GetAppliedDescription():GetAccessories(true)
-	
-	for _, AccessoryData in HumanoidAccessories do
+	local BTTSpring = SpringClass.new()
+	BTTSpring.Target = 3
+	BTTSpring.Speed = 10
+	BTTSpring.Damper = 0.1
 
-		local Accessory = {
-			Name = GetAccessoryNameFromId(AssetId),
-			Id = AccessoryData["AssetId"]
-		}
-		 
-		for _, AccessoryDescription in Humanoid.HumanoidDescription:GetChildren() do
-			if AccessoryDescription:IsA("AccessoryDescription") then
-				if AccessoryDescription.AssetId == Accessory.Id then
-					return Character:FindFirstChild(Accessory.Name)
-				end
+	RunService.Stepped:Connect(function(_, deltatime)
+		if LocalPlayer and LocalPlayer.Character and workspace.CurrentCamera then
+			local Camera = workspace.CurrentCamera
+			local HRP = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+
+			if HRP and (HRP.Position - Camera.CFrame.Position).Magnitude < 50 then
+				local CURRY = Torso.Position.Y
+				local Calculated = OGY - CURRY
+				OGY = CURRY
+				BRSTSpring:TimeSkip(deltatime)
+				BRSTSpring:Impulse(Calculated)
+
+				BTTSpring:TimeSkip(deltatime)
+				BTTSpring:Impulse(Calculated)
+
+				SJ.C0 = OGC0
+					* CFrame.new(0, -0.02 * (BRSTSpring.Velocity / 10), 0)
+					* CFrame.Angles(-10 * math.rad(BRSTSpring.Velocity), 0, 0)
+				A.C0 = OGC02
+					* CFrame.new(0, -0.05 * (BTTSpring.Velocity / 10), 0)
+					* CFrame.Angles(2 * math.rad(BTTSpring.Velocity), 0, 0)
 			end
 		end
-	end  
-end
-
-local function GetAccessoryHandle(Value : string | number | BasePart)
-	if typeof(Value) == "string" then
-		
-		local Accessory = Character:FindFirstChild(Value)
-		return Accessory and Accessory.Handle or nil
-		
-	elseif typeof(Value) == "number" then
-		
-		print("get me id", Value)
-		
-		local Accessory = GetAccessoryFromId(Value)
-		return Accessory and Accessory.Handle or nil
-		
-	elseif Value:IsA("BasePart") then
-		
-		return Value
-	end
-end
-
-local function ValidateParts(Part0, Part1)
-	local Part0IsValid = true
-	local Part1IsValid = true
-
-	if Part0.Parent == nil or Part0.Parent.Parent == nil or Character.Parent == nil then Part0IsValid = false end
-	if Part1.Parent == nil or Part1.Parent.Parent == nil or Character.Parent == nil then Part1IsValid = false end
-
-	return Part0IsValid, Part1IsValid
-end
-
-local function RoundTwo(Number: number)
-	return math.floor(Number * 10 ^ 2) / 10 ^ 2
-end
-
-local function ReplicateAccessory(Part0: string | number | BasePart, Part1: BasePart, Transform: CFrame)
-	if not Part0 or not Part1 then
-		warn("ReplicationTable Entry")
-	end
-	
-	local AccessoryHandle = GetAccessoryHandle(Part0)
-	local AccessoryTransform = Transform or CFrame.identity
-	local ReanimationHumanoid = ReanimationCharacter:FindFirstChildOfClass("Humanoid")
-
-	if AccessoryHandle == nil then return end
-	local AccessoryKey = AccessoryHandle.Parent
-	-- Store original offset for refit recovery
-	OriginalOffsets[AccessoryKey] = {
-	    Part1 = Part1,
-	    Transform = AccessoryTransform
-	}
-	-- Store simplified hat info for stable refit (only once)
-	if not OriginalHatInfo[AccessoryKey] then
-	    OriginalHatInfo[AccessoryKey] = {
-	        OriginalPart1 = Part1,
-	        OriginalTransform = AccessoryTransform or CFrame.new()
-	    }
-	end
-
-	if RefitBlacklist and AccessoryKey and not table.find(RefitBlacklist, AccessoryKey) then
-		table.insert(RefitBlacklist, AccessoryKey)
-	end
-	for Index, Value in ReplicationConnections do
-		   
-		if Index == AccessoryKey then
-			warn("already rep", AccessoryKey)
-			return
-		end	
-	end	
-	-- nested AttemptRefit removed to avoid aggressive re-entrancy
-
-	ReplicationConnections[AccessoryKey] = RunService.Heartbeat:Connect(function()
-		local Part0Exists, Part1Exists = ValidateParts(AccessoryHandle, Part1)
-		if not Part0Exists or not Part1Exists then ReplicationConnections[AccessoryKey]:Disconnect(); ReplicationConnections[AccessoryKey] = nil; pcall(function() warn("gone.",AccessoryHandle.Parent) end) return end
-
-		local RootPartVelocity = ReanimationCharacter.HumanoidRootPart.Velocity
-		local DirectionalVelocity = RootPartVelocity * math.clamp(ReanimationCharacter.Humanoid.WalkSpeed * 2, 16, 10000)
-		
-		local LinearVelocity = Vector3.new(DirectionalVelocity.X, 27 + math.sin(os.clock()), DirectionalVelocity.Z)
-		local AngularVelocity = Part1.AssemblyAngularVelocity
-		
-		local AntisleepPosition = Vector3.zero
-
-		if (ReanimationHumanoid.MoveDirection * Vector3.new(1,0,1)).Magnitude == 0 then
-			AntisleepPosition = Vector3.new(0.015 * math.sin(os.clock() * 8), 0, 0.015 * math.cos(os.clock() * 8))
-		end		
-
-		AccessoryHandle.AssemblyLinearVelocity = LinearVelocity
-		AccessoryHandle.AssemblyAngularVelocity = AngularVelocity
-
-		AccessoryHandle.CFrame = (Part1.CFrame * AccessoryTransform) + AntisleepPosition
 	end)
 end
 
-local function CreateDummy()	
-	local function SanitizeDummy(Dummy)
-		local function NoCollide(Part0, Part1)
-			local NoCollisionConstraint = Instance.new("NoCollisionConstraint")
-			NoCollisionConstraint.Name = Part1.Name
-			NoCollisionConstraint.Parent = Part0
-			NoCollisionConstraint.Part0 = Part0
-			NoCollisionConstraint.Part1 = Part1
-		end
-
-		for _, Value in Dummy:GetDescendants() do
-			if Value:IsA("Decal") or Value:IsA("ParticleEmitter") or Value:IsA("Fire") or Value:IsA("Smoke") or Value:IsA("Sparkles") then
-				Value:Destroy()
-			elseif Value:IsA("BasePart") then
-				Value.Transparency = 1
+local function VerifyRigAndApply(instance, ApplyPhysics)
+	task.spawn(function()
+		if instance:IsA("Model") then
+			local Player
+			if Settings.Only_Others then
+				Player = Players:GetPlayerFromCharacter(instance)
+				if Player == LocalPlayer then
+					return
+				end
 			end
-		end
+			if ApplyPhysics == nil then
+				ApplyPhysics = true
+			end
+			task.delay(30, task.cancel, coroutine.running()) -- time out the whole thing after 30 seconds (Deuces)
+			local Humanoid
+			repeat
+				Humanoid = instance:FindFirstChildWhichIsA("Humanoid")
+				if not Humanoid then
+					task.wait()
+				end
+			until Humanoid
 
-		for _, Part0 in Character:GetChildren() do
-			if Part0:IsA("BasePart") then
-				for _, Part1 in Dummy:GetChildren() do
-					if Part1:IsA("BasePart") then
-						NoCollide(Part0, Part1)
+			if not Settings.ForceAllRigs and instance:FindFirstChild("CustomRig") then -- maybe use findfirstdescendant instead just to be sure? (Deuces)
+				return
+			end -- we dont need floating tiddies again (Ukiyo)
+			local NewParts = ApplyRig(instance, Humanoid.RigType == Enum.HumanoidRigType.R6)
+
+			if ApplyPhysics then
+				if Settings.Simulate_Physics_On_LocalPlayer_Only then
+					if not Player then
+						Player = Players:GetPlayerFromCharacter(instance)
+					end
+					if not Player or Player ~= LocalPlayer then
+						return
 					end
 				end
+				JigglePhysics(NewParts)
 			end
 		end
-	end
-
-	local HumanoidDescription = Players:GetHumanoidDescriptionFromUserId(Player.UserId)
-	local ReanimationDummy = Players:CreateHumanoidModelFromDescription(HumanoidDescription, Enum.HumanoidRigType.R6)
-	SanitizeDummy(ReanimationDummy)
-
-	ReanimationDummy.Parent = workspace
-	ReanimationDummy:PivotTo(Character.Head.CFrame * CFrame.new(0,0,0))
-
-	return ReanimationDummy
-end
-
-local function ReanimationVisualization()
-	local VisualHighlight = Instance.new("Highlight")
-	VisualHighlight.Parent = ReanimationCharacter
-	VisualHighlight.FillTransparency = 1
-	VisualHighlight.OutlineTransparency = 1
-
-	local VisualProgressGui = Instance.new("BillboardGui")
-	VisualProgressGui.Parent = ReanimationCharacter.Head
-	VisualProgressGui.StudsOffset = Vector3.new(0,1.5,0)
-	VisualProgressGui.Size = UDim2.new(4,0,0.05,0)
-	VisualProgressGui.AlwaysOnTop = true
-	VisualProgressGui.LightInfluence = 0
-
-	local VisualProgressContainerFrame = Instance.new("Frame")
-	VisualProgressContainerFrame.Parent = VisualProgressGui
-	VisualProgressContainerFrame.BackgroundColor3 = Color3.fromRGB(35,35,35)
-	VisualProgressContainerFrame.BackgroundTransparency = 0.7
-	VisualProgressContainerFrame.Size = UDim2.new(1,0,1,0)
-
-	local VisualProgressProgressFrame = VisualProgressContainerFrame:Clone()
-	VisualProgressProgressFrame.Parent = VisualProgressContainerFrame
-	VisualProgressProgressFrame.BackgroundColor3 = Color3.fromRGB(255,255,255)
-	VisualProgressProgressFrame.BackgroundTransparency = 0.5
-	VisualProgressProgressFrame.Size = UDim2.new(0,0,1,0)
-
-	local VisualInbetweenDebounce = 0.5 + GetPlayerPing()
-
-	local function CloneAccessory(EntryTable)
-		local Part0 = EntryTable.Part0
-		local Part1 = EntryTable.Part1
-		local Transform = EntryTable.Transform or CFrame.identity
-
-		local AccessoryHandle = GetAccessoryHandle(Part0)
-
-		local AccessoryTransform = Transform or CFrame.identity
-
-		if AccessoryHandle == nil then warn("Accessory not found", Part0) return end
-
-		local ClonedHandle = AccessoryHandle:Clone()
-		ClonedHandle.Parent = ReanimationCharacter
-		ClonedHandle.Name = "ClonedHandle"..AccessoryHandle.Parent.Name
-		ClonedHandle.Massless = true
-		ClonedHandle.CanTouch = false
-		ClonedHandle.CanQuery = false
-		ClonedHandle.Transparency = 1
-		ClonedHandle.AccessoryWeld:Destroy()
-		ClonedHandle.CFrame = Part1.CFrame * Transform
-
-		local AccessoryWeld = Instance.new("WeldConstraint")
-		AccessoryWeld.Parent = ClonedHandle
-		AccessoryWeld.Part0 = ClonedHandle
-		AccessoryWeld.Part1 = Part1
-
-		task.delay(RespawnTime + VisualInbetweenDebounce, function()
-			ClonedHandle:Destroy()
-		end)
-	end	
-
-	for Index, EntryTable in ReplicationTableData do
-		if typeof(EntryTable) ~= "table" then continue end
-		CloneAccessory(EntryTable)
-	end
-
-	if ReplicationTableData.NonEssentialAccessories then
-		for _, Value in Humanoid:GetAccessories() do
-			if ReanimationCharacter:FindFirstChild(Value.Name) and not ReanimationCharacter:FindFirstChild("ClonedHandle"..Value.Name) then
-				CloneAccessory({Part0 = Value.Handle, Part1 = ReanimationCharacter:FindFirstChild(Value.Name).Handle})
-			end	
-		end
-	end
-
-	local FadeInTweenInfo = TweenInfo.new(RespawnTime + VisualInbetweenDebounce, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut)
-	TweenService:Create(VisualHighlight, FadeInTweenInfo, {OutlineTransparency = 0.5}):Play()
-	TweenService:Create(VisualProgressProgressFrame, FadeInTweenInfo, {Size = UDim2.new(1,0,1,0)}):Play()
-
-	for _, ClonedHandle in ReanimationCharacter:GetChildren() do
-		if string.match(ClonedHandle.Name, "ClonedHandle") then
-			TweenService:Create(ClonedHandle, FadeInTweenInfo, {Transparency = 0}):Play()
-		end
-	end
-
-	Character.Head:FindFirstChildOfClass("Decal"):Destroy()
-	for _, Value in Character:GetChildren() do
-		if Value:IsA("BasePart") then
-			Value.Transparency = 1
-		elseif Value:IsA("Accessory") then
-			Value.Handle.Transparency = 1
-		end	
-	end
-
-	task.spawn(function()
-		task.wait(RespawnTime + VisualInbetweenDebounce)
-
-		for _, Value in Character:GetChildren() do
-			if Value:IsA("Accessory") then
-				Value.Handle.Transparency = 0
-			end	
-		end
-
-		VisualHighlight.Parent = Character
-		VisualHighlight.OutlineTransparency = 0
-		TweenService:Create(VisualHighlight, TweenInfo.new(0.75), {OutlineTransparency = 1}):Play()
-
-		VisualProgressProgressFrame.BackgroundTransparency = 0
-		VisualProgressProgressFrame.BorderSizePixel = 0
-		TweenService:Create(VisualProgressProgressFrame, TweenInfo.new(0.75), {BackgroundTransparency = 1}):Play()
-		VisualProgressContainerFrame.BackgroundTransparency = 1
-
-		task.delay(0.75, function()
-			VisualProgressGui:Destroy()
-			VisualHighlight:Destroy()
-		end)
 	end)
 end
 
-local function ReanimationRespawn()
-	replicatesignal(Player.ConnectDiedSignalBackend)
-	if not IsStudio then workspace.FallenPartsDestroyHeight = -500 end
-
-	for _, Value in ReanimationCharacter:GetChildren() do
-		if Value:IsA("BasePart") then
-			Value.CanCollide = false
-		end	
-	end	
-	for _, Value in ReanimationCharacter:FindFirstChildOfClass("Humanoid"):GetAccessories() do
-		Value.Handle.CanCollide = true
-	end	
-
-	ReanimationCharacter:BreakJoints()
-	ReanimationCharacter.Torso.AssemblyLinearVelocity = Vector3.new(math.random(-5,5),math.random(-5,5),math.random(-5,5))
-	ReanimationCharacter.Torso.AssemblyAngularVelocity = Vector3.new(math.random(-5,5),math.random(-5,5),math.random(-5,5))
-
-	task.wait(RespawnTime)
-
-	ReanimationCharacter:Destroy()
-	StarterGui:SetCore("ResetButtonCallback", true)
-end	
-
-local function ReanimationInitializeCharacter()
-	Notification("REANIMITE", "Please wait "..RespawnTime.." second(s) to reanimate", RespawnTime)
-
-	if not IsStudio then workspace.FallenPartsDestroyHeight = 0/0 end
-	Character:PivotTo(CFrame.new(1000,1600,-1000))
-	for _, Part in Character:GetDescendants() do if Part:IsA("BasePart") then Part.AssemblyLinearVelocity = Vector3.new(0,2255,0) end end
-
-	local CameraCFrame = Camera.CFrame
-	Player.Character = ReanimationCharacter
-	Camera.CameraSubject = ReanimationCharacter:FindFirstChildOfClass("Humanoid")
-
-	task.spawn(function()
-		RunService.RenderStepped:Wait()
-		Camera.CFrame = CameraCFrame
-	end)	
-
-	if not IsStudio then Player.SimulationRadius = 1000 end
+while game.GameId == 0 do
+	task.wait()
 end
 
-local function ReanimationPermadeathCharacter()
-	if IsStudio then
-		task.wait(RespawnTime)
-		Character:BreakJoints()
-	else
-		task.delay(RespawnTime + GetPlayerPing(), function()
-			local CameraCFrame = Camera.CFrame
-			RunService.RenderStepped:Wait()
-			Camera.CFrame = CameraCFrame
-		end)
+if game.GameId == 1359573625 then -- dw (Deuces)
+	local LiveFolder = workspace:WaitForChild("Live", math.huge)
+	LiveFolder.ChildAdded:Connect(VerifyRigAndApply)
 
-		replicatesignal(Player.ConnectDiedSignalBackend)
-		task.wait(RespawnTime + GetPlayerPing())
-
-		Player.Character = Character
-		if replicatesignal2 then replicatesignal2(Humanoid, "ServerBreakJoints") else replicatesignal(Humanoid.ServerBreakJoints) end
-		Player.Character = ReanimationCharacter	
+	for _, child in ipairs(LiveFolder:GetChildren()) do
+		VerifyRigAndApply(child)
 	end
 
-	Player.ReplicationFocus = ReanimationCharacter.PrimaryPart
-end
+	local NPCFolder = workspace:WaitForChild("NPCs", math.huge)
+	NPCFolder.ChildAdded:Connect(VerifyRigAndApply)
 
-local function ReanimationHandleRespawning()
-	Notification("REANIMITE", "Reanimated", 2)
+	for _, child in ipairs(NPCFolder:GetChildren()) do
+		VerifyRigAndApply(child, false)
+	end
+else -- other games (Deuces)
+	workspace.DescendantAdded:Connect(VerifyRigAndApply)
 
-	if not IsStudio then
-		local RespawnEvent = Instance.new("BindableEvent")
-		RespawnEvent.Event:Once(ReanimationRespawn)
-		StarterGui:SetCore("ResetButtonCallback", RespawnEvent)
+	for _, child in ipairs(workspace:GetDescendants()) do
+		VerifyRigAndApply(child)
 	end
 end
-
-local function ReplicateReplicationTable(ReplicationTable)	
-	for Index, EntryTable in ReplicationTable do
-		if typeof(EntryTable) ~= "table" then continue end
-
-		if EntryTable.Part0 and EntryTable.Part1 then
-				ReplicateAccessory(EntryTable.Part0, EntryTable.Part1, EntryTable.Transform)
-		else
-			warn("ReplicationTable Entry #"..Index.." has not defined Part0 or Part1")
-		end	
-	end
-end
-
-function ReanimationModule:CreateDummy()
-	ReanimationCharacter = CreateDummy()
-
-	return ReanimationCharacter
-end
-
-function ReanimationModule:Reanimate(ReplicationTable)
-	ReplicationTableData = ReplicationTable
-
-	ReanimationInitializeCharacter()
-	ReanimationVisualization()
-	ReanimationPermadeathCharacter()
-
-	ReplicateReplicationTable(ReplicationTable)
-
-	if ReplicationTable.NonEssentialAccessories then
-		for _, Value in Humanoid:GetAccessories() do
-			if ReanimationCharacter:FindFirstChild(Value.Name) then
-				ReplicateAccessory(Value.Handle, ReanimationCharacter:FindFirstChild(Value.Name).Handle)
-			end	
-		end
-	end
-
-	ReanimationHandleRespawning()
-end
-
-local function RefitAccessories()
-    if not RefitEnabled then return end
-
-    local lostCount = 0
-
-    -- Clean up dead entries (like Krypton does)
-    for i = #RefitBlacklist, 1, -1 do
-        local acc = RefitBlacklist[i]
-        if not acc or not acc.Parent then
-            table.remove(RefitBlacklist, i)
-        else
-            -- still exists but maybe desynced → count as potentially lost
-            if acc.Handle and acc.Handle.Parent == nil then
-                lostCount += 1
-            end
-        end
-    end
-
-    -- If too many lost → force re-align / re-claim
-    if lostCount > RefitThreshold or #RefitBlacklist < TotalAccessories - RefitThreshold then
-        Notification("REANIMITE", "Refitting accessories... (" .. lostCount .. " lost)", 3)
-
-        -- Option A: Re-run accessory replication on visible hats
-        for _, acc in Humanoid:GetAccessories() do
-            local handle = acc:FindFirstChild("Handle")
-            if handle and handle.Parent then
-                -- Try to re-attach to a random / nearest dummy limb (customize this)
-                local targetPart = ReanimationCharacter:FindFirstChild("Right Arm") 
-                    or ReanimationCharacter:FindFirstChild("RightHand") 
-                    or ReanimationCharacter.HumanoidRootPart
-
-                if targetPart then
-                    ReplicateAccessory(handle, targetPart, CFrame.new())  -- or keep original offset if you store it
-                end
-            end
-        end
-
-        -- Option B: extreme — respawn dummy (risky, but Krypton sometimes does heavy resets)
-        -- task.spawn(ReanimationRespawn)   -- uncomment only if desperate
-    end
-end
-
--- helper: detect obvious rig collapse
-local function IsRigCollapsed()
-    if not ReanimationCharacter or not ReanimationCharacter.Parent then return true end
-    local torso = ReanimationCharacter:FindFirstChild("Torso") or ReanimationCharacter:FindFirstChild("UpperTorso")
-    local root  = ReanimationCharacter:FindFirstChild("HumanoidRootPart")
-    if not torso or not root then return true end
-    -- if limbs are all very close to torso center, consider collapsed
-    local collapsedCount = 0
-    local limbNames = {"Right Arm","Left Arm","Right Leg","Left Leg","Head"}
-    for _, name in ipairs(limbNames) do
-        local p = ReanimationCharacter:FindFirstChild(name)
-        if p and p:IsA("BasePart") then
-            if (p.Position - torso.Position).Magnitude < 0.5 then
-                collapsedCount = collapsedCount + 1
-            end
-        end
-    end
-    -- if 3 or more limbs are collapsed, consider rig broken
-    return collapsedCount >= 3
-end
-
--- Improved refit routine: periodically scan the real character's accessories and re-replicate any surviving hats
-local function AttemptRefit()
-    if not RefitEnabled then return end
-
-    local recovered = 0
-    local rootPart = ReanimationCharacter and ReanimationCharacter:FindFirstChild("HumanoidRootPart")
-    if not rootPart then return end
-
-    for _, accessory in ipairs(Humanoid:GetAccessories()) do
-        local handle = accessory:FindFirstChild("Handle")
-        if not handle or handle.Parent ~= accessory then
-            continue
-        end
-
-        -- Already replicating? Skip to avoid dupes
-        if ReplicationConnections[accessory] then continue end
-
-        local info = OriginalHatInfo[accessory]
-        local targetLimb = info and info.OriginalPart1
-
-        -- Fallback only if original limb missing
-        if not targetLimb or not targetLimb.Parent or not targetLimb:IsDescendantOf(ReanimationCharacter) then
-            targetLimb = rootPart
-        end
-
-        -- Clean any stale conn
-        if ReplicationConnections[accessory] then
-            ReplicationConnections[accessory]:Disconnect()
-            ReplicationConnections[accessory] = nil
-        end
-
-        -- Replicate with original offset
-        local transform = info and info.OriginalTransform or CFrame.new()
-        ReplicateAccessory(handle, targetLimb, transform)
-
-        recovered = recovered + 1
-        print("[Refit] Recovered hat:", accessory.Name, "on", targetLimb.Name)
-
-        if recovered >= RefitPerCycle then
-            break
-        end
-    end
-
-    if recovered > 0 then
-        Notification("REANIMITE", "Refit recovered " .. recovered .. " hats!", 4)
-    end
-end
-
--- periodic loop
-task.spawn(function()
-    task.wait(5)
-    while RefitEnabled do
-        pcall(AttemptRefit)
-        task.wait(RefitInterval)
-    end
-end)
-
-return ReanimationModule
-
-
-
