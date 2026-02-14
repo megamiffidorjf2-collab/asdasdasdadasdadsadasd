@@ -1070,10 +1070,6 @@ local function StartReanimate()
 	
 	FallenPartsDestroyHeightOffset = FallenPartsDestroyHeight + DestroyHeightOffset or 100
 	Character = Player['Character'] or SignalWait(Player['CharacterAdded'])
-
-	if not PermanentDeath and ReanimateConfig.Refit then
-		Refit = nil
-	end
 	
 	if not NoBodyNearby and FlingMethod == ("Hat" or "HatTouch") then
 		Flinging = nil
